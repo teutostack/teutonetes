@@ -1,0 +1,24 @@
+#cloud-config
+hostname: jumphost
+fqdn: jumphost.intra
+manage_etc_hosts: true
+
+chpasswd: { expire: False }
+
+# add each entry to ~/.ssh/authorized_keys for the configured user or the
+# first user defined in the user definition directive.
+ssh_authorized_keys:
+# place keys here
+
+runcmd:
+  - [ sh, -c, echo "=========hello world'=========" ]
+  - [ sh, -c, "sudo apt-get -y update"]
+  - [ sh, -c, "sudo apt-get install -y apt-transport-https ca-certificates curl software-properties-common"]
+  - [ sh, -c, "sudo apt-get -y update"]
+  - [ sh, -c, "echo 'OS_AUTH_URL={{.authurl}}\nOS_PROJECT_NAME={{.projectname}}\nOS_PASSWORD={{.ospassword}}\nOS_USERNAME={{.username}}\nOS_NETWORK_ID={{.networkid}}\nOS_FLAVOR={{.flavorname}}\nOS_IMAGE={{.imagename}}\nJUMPHOST_NAME={{.jumphostname}}\nOS_REGION_NAME=RegionOne\nOS_TENANT_ID={{.projectid}}\nFLOATING_IP={{.floatingip}}\nFLOATING_NAME={{.floatingname}}\nCLUSTER_NAME={{.clustername}}' >> /home/ubuntu/.config"]
+  - [ sh, -c, "echo 'Host *\n    StrictHostKeyChecking no' >> /home/ubuntu/.ssh/config"]
+  - [ sh, -c, "sed -i \"/PasswordAuthentication yes/c PasswordAuthentication no\" /etc/ssh/sshd_config"]
+  - [ sh, -c, "sudo service ssh restart"]
+  - [ sh, -c, "echo \"{{.privkey}}\" > /home/ubuntu/.ssh/id_rsa"]
+  - [ sh, -c, "chown ubuntu:ubuntu /home/ubuntu/.ssh/id_rsa"]
+  - [ sh, -c, "chmod 600 /home/ubuntu/.ssh/id_rsa"]

@@ -1,0 +1,30 @@
+[Credentials]
+  Auth_Url = "https://AUTHURL:5000/?v2"
+  Clustername = "TESTCLUSTER"
+  DomainName = "default"
+  Password = "PASSWORD"
+  ProjectID = "XXXX-XXXXXX-XXXXXX-XXXXXX"
+  ProjectName = "PROJECT"
+  Username = "USER"
+
+[Network]
+  ExternalNetworkID = "XXXX-XXXXXX-XXXXXX-XXXXXX"
+
+[Nodes]
+  FlavorName = "flavorxy"
+  ImageName = "imageyx"
+  NumNodes = 3
+   
+
+[Master]
+  FlavorName = "flavorxy"
+  ImageName = "imageyx"
+  NumMasters = 3
+
+[Security]
+  SecurityGroups = ["XXXX-XXXXXX-XXXXXX-XXXXXXX"]
+
+[Subnet]
+  AllocationPoolEnd = "192.168.99.254"
+  AllocationPoolStart = "192.168.99.2"
+  CIDR = "192.168.99.0/24"

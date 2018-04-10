@@ -1,0 +1,34 @@
+---
+- hosts: all
+  gather_facts: no
+  tasks:
+   - name: Wait for all nodes to be ready.
+     wait_for:
+       path: /tmp/ready
+  
+   - name: ensure python is installed
+     raw: test -e /usr/bin/python || (sudo apt-get -y update && sudo apt-get install -y python-minimal);
+
+   - name: Install python yaml
+     raw: apt-get install -y python-yaml
+     become: true
+     
+   - name: Add localhost to /etc/hosts;
+     lineinfile:
+       dest=/etc/hosts
+       line="127.0.1.1"
+       owner=root
+
+   - name: Append /etc/hostname to /etc/hosts
+     shell: sudo cat /etc/hostname >> /etc/hosts ;
+    
+   - name: Add ubuntu xenial repository to hosts.
+     apt_repository:
+       repo: deb https://apt.dockerproject.org/repo ubuntu-xenial main
+       state: present
+    
+   - name: Update ssh-rsa inside authorized key.
+     lineinfile:
+       path: /root/.ssh/authorized_keys
+       regexp: '^.*ssh-rsa'
+       line: 'ssh-rsa'

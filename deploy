@@ -1,0 +1,140 @@
+#!/bin/sh
+if [ "$1" != "" ]
+then
+  cluster_name="$1"
+else
+  cluster_name="$CLUSTER_NAME"
+fi
+
+network_id=$(openstack network list | grep $cluster_name | awk {'print $2'})
+subnet_id=$(openstack subnet list | grep $cluster_name | awk {'print $2'})
+#subnet_id=$(openstack network list -c ID -c Subnets | grep $OS_NETWORK_ID | awk {'print $4'})
+extern_id=$(openstack network list | grep extern | awk {'print $2'})
+floating_ip=$(openstack server list -c Name -c Networks | grep $cluster_name-node-0 | cut -d'|' -f3 | awk {'print $2'})
+
+#generate_inventory $cluster_name
+####### INVENTORY GENERATOR
+echo "Generate inventory.cfg template."
+
+mkdir -p ~/cluster/$cluster_name/
+cat - > ~/cluster/$cluster_name/inventory.cfg <<EOF
+[all]
+
+
+# ## configure a bastion host if your nodes are not directly reachable
+bastion ansible_ssh_host=$floating_ip ansible_host=ubuntu ansible_ssh_common_args='-o StrictHostKeyChecking=no'
+
+[kube-master]
+
+
+[etcd]
+
+
+[kube-node]
+
+
+[k8s-cluster:children]
+kube-node
+kube-master
+EOF
+
+echo "Filling template with cluster data."
+let m=0
+let e=0
+for n in $(seq 0 $(($(openstack server list -c Name | grep $cluster_name | wc -l) - 1 )) )
+do
+  node_name=$cluster_name-node-$n
+  node_ip=$(openstack server show $node_name | grep addresses | cut -d'=' -f2 | cut -d',' -f1 | cut -d ' ' -f0)
+  sed -i '/^\[all\]/a\'"$node_name"' ansible_ssh_host='"$node_ip"' ansible_ssh_common_args='\''-o StrictHostKeyChecking=no'\''' \
+  ~/cluster/$cluster_name/inventory.cfg
+  sed -i '/^\[kube-node\]/a\'"$node_name"'' ~/cluster/$cluster_name/inventory.cfg
+  if [ $m -lt 2 ]
+  then
+    sed -i '/^\[kube-master\]/a\'"$node_name"'' ~/cluster/$cluster_name/inventory.cfg
+  fi
+  if [ $e -lt 3 ]
+  then
+    sed -i '/^\[etcd\]/a\'"$node_name"'' ~/cluster/$cluster_name/inventory.cfg
+  fi
+  let "m++"
+  let "e++"
+done
+
+##########################
+
+echo "copy group_vars directory into cluster directory"
+cp -r /opt/kubespray/inventory/group_vars ~/cluster/$cluster_name/.
+
+echo "Update kubespray configuration to take the edge node's floating ip into consideration when creating the ssl certificates."
+sed -i "/# supplementary_addresses_in_ssl_keys:/a supplementary_addresses_in_ssl_keys: \n - $floating_ip" ~/cluster/$cluster_name/group_vars/k8s-cluster.yml
+
+echo "Prepare configuration of OpenStack as cloud-provider."
+sed -i "/## To enable automatic floating ip provisioning, specify a subnet./a openstack_lbaas_floating_network_id: $extern_id"  ~/cluster/$cluster_name/group_vars/all.yml
+sed -i "/#openstack_lbaas_subnet_id: \"Neutron subnet ID \(not network ID\) to create LBaaS VIP\"/a openstack_lbaas_enabled: True\n\openstack_lbaas_subnet_id: $subnet_id" ~/cluster/$cluster_name/group_vars/all.yml
+
+echo "Scanning host key of edge node."
+if [ ! -f ~/.ssh/known_hosts ]
+then
+  mkdir -p ~/.ssh/
+  echo "" > ~/.ssh/known_hosts
+fi
+ssh-keyscan -H $floating_ip >> ~/.ssh/known_hosts 
+
+echo "Preparing the Nodes for kubespray playbook (sudo-privileges, python-installation, etc)"
+export ANSIBLE_HOST_KEY_CHECKING=False
+
+ansible-playbook --timeout=30 --ssh-extra-args="-o StrictHostKeyChecking=no -o ProxyCommand=\"ssh -i ~/cluster/$cluster_name/private.key -W %h:%p -q ubuntu@$floating_ip\"" \
+  -e ansible_host=$floating_ip -e ansible_user=ubuntu -i ~/cluster/$cluster_name/inventory.cfg \
+  --private-key=~/cluster/$cluster_name/private.key \
+  --limit='all:!bastion' -b --become -u ubuntu /tools/groundwork.yml
+
+
+## Kubernetes deployment via kubespray
+echo "Install Kubernetes."
+ansible-playbook --ssh-extra-args="-o StrictHostKeyChecking=no -o ProxyCommand=\"ssh -i ~/cluster/$cluster_name/private.key -W %h:%p -q ubuntu@$floating_ip\"" \
+  -b --become-user=root -u ubuntu -i ~/cluster/$cluster_name/inventory.cfg -e ansible_user=ubuntu -e ansible_host=$floating_ip \
+  --private-key=~/cluster/$cluster_name/private.key \
+  /opt/kubespray/cluster.yml
+echo "Kubernestes Cluster ready... Continue with configurations."
+sleep 1
+echo "Downloading helm-installer. Tiller is running but there is no client."
+sleep 2
+cp /usr/bin/helm ~/cluster/
+ansible-playbook --timeout=30 --ssh-extra-args="-o StrictHostKeyChecking=no" -i ~/cluster/$cluster_name/inventory.cfg \
+  -e ansible_host=$floating_ip -e ansible_user=ubuntu \
+  --private-key=~/cluster/$cluster_name/private.key \
+  -b --become -u ubuntu /tools/helm_n_tiller.yml
+
+echo "Preparing certificates and credentials to configure remotely access to the kubernetes cluster via local kubectl."
+mkdir -p ~/cluster/$cluster_name/cert
+
+echo "Creating kubectl config for cluster."
+remote_kubectl $cluster_name
+
+echo "Config adminstate for dashboard usage."
+kubectl config use-context context-$cluster_name
+kubectl create clusterrolebinding --user system:serviceaccount:kube-system:kubernetes-dashboard kube-system-cluster-admin --clusterrole cluster-admin 
+echo "To use kubectl remotely use context \" context-$cluster_name \"."
+echo "To access the kubernetes dashboard use \" kubectl proxy & \"."
+echo "Visit in your browser of choice this site:"
+echo "\" http://localhost:8001/api/v1/namespaces/kube-system/services/https:kubernetes-dashboard:/proxy/ \""
+
+#### COMMENTED STUFF
+#						v--Maybe parameter? Location may vary														v-- Where is .config now?
+#alias teutonetes-$cluster_name=\"docker run -ti --rm -v ~/teutonetes/cluster:/root/cluster/ -v /home/$(whoami)/.kube:/root/.kube/ -w /root/ -e UID=$UID -e GID=$(grep ":$UID:" /etc/passwd | cut -d":" -f4) --env-file ~/teutonetes/$cluster_name/.config registry-gitlab.teuto.net/technik/teutonetes:latest
+
+#ansible-playbook --timeout=30 --ssh-extra-args="-o StrictHostKeyChecking=no" -i ~/cluster/$cluster_name/inventory.cfg \
+#  --private-key=~/cluster/$cluster_name/k8s-$cluster_name-keypair   -b --become -u ubuntu /tools/groundwork.yml
+
+#ansible-playbook --timeout=30 --ssh-extra-args="-o StrictHostKeyChecking=no -o ProxyCommand=\"ssh -i ~/cluster/$cluster_name/k8s-$cluster_name-keypair -W %h:%p -q ubuntu@$floating_ip\"" \
+
+#kubespray deploy
+#ansible-playbook --ssh-extra-args="-o StrictHostKeyChecking=no -o ProxyCommand=\"ssh -i ~/cluster/$cluster_name/k8s-$cluster_name-keypair -W %h:%p -q ubuntu@$floating_ip\"" \
+
+#mkdir -p ~/.kube/$cluster_name/
+
+#cp ~/cluster/$cluster_name/cert/ca.pem ~/.kube/$cluster_name/
+
+#openssl enc -base64 -in ~/cluster/$cluster_name/cert/node-$FLOATING_NAME-key.pem -out ~/cluster/$cluster_name/cert/node-$FLOATING_NAME-key-enc.pem
+#openssl enc -base64 -in ~/cluster/$cluster_name/cert/node-$FLOATING_NAME.pem -out ~/cluster/$cluster_name/cert/node-$FLOATING_NAME-enc.pem
+#openssl enc -base64 -in ~/cluster/$cluster_name/cert/ca.pem -out ~/cluster/$cluster_name/cert/ca_enc.pem

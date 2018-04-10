@@ -1,0 +1,29 @@
+---
+- hosts: all
+  gather_facts: no
+  tasks:
+   
+#   - name: Create a SC for Cinder.
+#     run_once: true
+#     kubernetes:
+#       api_endpoint: 127.0.0.1
+#       insecure: true
+#       inline_data:
+#         kind: StorageClass
+#         apiVersion: storage.k8s.io/v1
+#         metadata:
+#           name: teutostack
+#         provisioner: kubernetes.io/cinder
+#       state: present
+#     ignore_errors: yes
+   
+   - name: Fetching cluster certificate.
+     fetch:
+       src: /etc/kubernetes/ssl/{{ item }}
+       dest: ~/cluster/{{ clustername }}/cert/
+       flat: yes
+     with_items:
+       - "ca.pem"
+       - "{{ pemname }}.pem"
+       - "{{ pemname }}-key.pem"
+     become: yes

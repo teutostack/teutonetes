@@ -1,0 +1,40 @@
+#!/bin/sh
+
+if [ "$1" != "" ]
+then
+  cluster_name="$1"
+else
+  echo "Error, please provide a cluster name."
+  exit 1
+fi
+
+floating_ip=$(openstack server list -c Name -c Networks | grep $cluster_name-node-0 | cut -d'|' -f3 | awk {'print $2'})
+
+echo "Creating kubectl config for cluster."
+mkdir -p ~/cluster/$cluster_name/cert
+ansible-playbook --timeout=30 --ssh-extra-args="-o StrictHostKeyChecking=no" --limit='bastion' -i ~/cluster/$cluster_name/inventory.cfg \
+  --private-key=~/cluster/$cluster_name/private.key \
+  -e clustername=$cluster_name -b --become -u ubuntu /tools/aftermath.yml
+
+kubectl config set-cluster cluster-$cluster_name \
+  --certificate-authority=/root/cluster/$cluster_name/cert/ca.pem \
+  --embed-certs=true \
+  --server=https://$floating_ip:6443
+
+kubectl config set-credentials admin-$cluster_name \
+  --client-certificate=/root/cluster/$cluster_name/cert/admin-$cluster_name-node-0.pem \
+  --client-key=/root/cluster/$cluster_name/cert/admin-$cluster_name-node-0-key.pem \
+  --embed-certs=true
+
+kubectl config set-context context-$cluster_name \
+  --cluster=cluster-$cluster_name \
+  --user=admin-$cluster_name
+
+kubectl config use-context context-$cluster_name
+echo "kubectl configuration done. Test connection..."
+kubectl get componentstatuses
+if [ $? -ne 0 ]
+then
+  echo "Error."
+fi
+
